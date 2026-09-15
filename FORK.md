@@ -36,7 +36,27 @@ yay -S smi-usbdisplay
 
 # 3. If the service already crash-looped before step 1, clear it
 sudo systemctl reset-failed smiusbdisplay && sudo systemctl restart smiusbdisplay
+
+# 4. Pin the daemon to P-cores (CPU list is for the i7-1260P; check /sys/devices/cpu_core/cpus)
+sudo mkdir -p /etc/systemd/system/smiusbdisplay.service.d
+printf '[Service]\nCPUAffinity=0-7\n' | sudo tee /etc/systemd/system/smiusbdisplay.service.d/pcores.conf
+sudo systemctl daemon-reload && sudo systemctl restart smiusbdisplay
 ```
+
+### Why the SMI monitor is ~30fps and how step 4 helps
+
+- **Where the limit comes from:** evdi only completes the compositor's page flip when the SMI daemon grabs the
+  pixels (`evdi_painter_grabpix_ioctl` releases the held vblank). So the compositor's frame rate *is* the daemon's
+  grab rate. Hyprland's debug overlay showed ~30fps on that output.
+- **What the daemon is doing:** it JPEG-encodes on the CPU (libjpeg-turbo). During motion its `encodeRgb`
+  thread peaked at ~98% of one core while the system was 96% idle, so it's single-thread CPU-bound, and more
+  total CPU or a different power limit won't help.
+- **What step 4 changes:** unpinned, its threads roam onto E-cores. Pinning to P-cores made motion visibly
+  smoother but not a locked 60. The SMI Windows driver is a separate, faster implementation; nothing on the
+  Linux side gets you Windows smoothness. Put the monitor that needs smoothness on the native HDMI port.
+- **Measurement notes:** `SMIUSBDisplayManager -fps show` printed nothing, and `hyprctl eval
+  'hl.config({ debug = { overlay = true } })'` froze the screens, so don't retry either. The daemon also has
+  an untested `-mode light|smart` power-mode switch.
 
 The package is deliberately named `evdi-dkms-grupertal-git`, not `evdi-dkms-git`, so
 `yay -Syu --devel` does not replace it with the unpatched AUR build.
